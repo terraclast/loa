@@ -1,0 +1,57 @@
+# 📄 Incident Report: Nextcloud Service Outage
+
+## 🕓 Date of Incident
+
+July 26, 2025
+
+## 📍 Affected Service
+
+Library of Alexandrea (Nextcloud instance hosted on Ubuntu server VM)
+
+## ⚠️ Incident Summary
+
+While performing large-scale file uploads (\~100GB), the Nextcloud instance froze and became unresponsive. Attempts to access the site from other devices resulted in an "Internal Server Error". Logs later revealed a Redis exception triggered by a failed attempt to persist data during an RDB snapshot. The root cause was a full root filesystem, specifically the `/var/www/nextcloud/data` directory.
+
+## 🔍 Root Cause
+
+* The virtual machine's logical volume (`ubuntu-vg/ubuntu-lv`) was only provisioned 100GB, despite the host having a 2TB physical drive.
+* During heavy uploads, the filesystem filled up completely, causing database and Redis services to fail.
+
+## 🧰 Detection
+
+* Observed upload freeze in browser
+* Nextcloud displayed "Internal Server Error"
+* Logs showed `RedisException` errors
+* `df -h` confirmed 100% disk usage on `/`
+* `du -h /var` and `journalctl` helped identify `/var/www/nextcloud/data` as the culprit
+
+## 🛠️ Resolution Steps
+
+1. Used `df`, `lsblk`, and `lvdisplay` to inspect partition and volume sizes.
+2. Extended the logical volume and resized the filesystem:
+
+   * `lvextend`
+   * `resize2fs`
+3. Restarted Apache and MariaDB services.
+4. Confirmed restored access to Nextcloud.
+
+## ✅ Current Status
+
+Nextcloud is fully operational.
+
+## 🧠 Lessons Learned
+
+* **Monitor logical storage limits, not just physical disk size**
+  The host machine had 2TB of physical disk attached, which led to the assumption that space would not be an issue. However, the virtual machine's logical volume (`ubuntu-vg/ubuntu-lv`) was only provisioned with 100GB. This caused the server to run out of space under heavy upload conditions. Lesson: always check how much of the disk is actually *allocated* to the running system using tools like `df -h`, `lsblk`, and `lvdisplay`.
+
+* **Validate assumptions against actual output**
+  During early troubleshooting, I glanced at the disk usage but missed the critical detail that only 100GB was in use, despite the larger physical disk. This reinforced the value of *slowing down and reading outputs carefully* — especially when dealing with layered storage abstractions in virtualized environments.
+
+* **Fail gracefully and recover quickly**
+  When uploads froze and the server became unresponsive, I methodically worked through logs, checked system resource limits, and eventually traced the root cause to a full `/var/www` directory. The structured recovery process — expanding the logical volume, restarting necessary services, and validating system health — worked as intended.
+
+* **Service dependencies matter**
+  Even after resolving disk issues, Nextcloud remained inaccessible until MariaDB was restarted. This highlighted how storage-related failures can cascade to dependent services and emphasized the importance of verifying each service layer independently.
+
+* **Postmortems are part of infrastructure hygiene**
+  Writing this up has reinforced how valuable it is to log incidents, decisions, and technical findings — not just for personal learning, but to share knowledge and sharpen incident response processes going forward.
